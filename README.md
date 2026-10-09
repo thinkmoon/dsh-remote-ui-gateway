@@ -2,47 +2,48 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-An authenticated reverse proxy for the [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI, packaged as a DSH plugin. Remote browsers keep their own `Host` and `Origin`; DSH 0.2 admits them through `trustedHosts`.
+Remote access to the [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI, as a plugin that starts with `dsh web`. DSH stays on loopback. The gateway is the only process on the network, and DSH 0.2 admits the session through its own `trustedHosts` fence.
 
 ```sh
 dsh plugin --profile web add dsh-remote-gateway   # or link:<local checkout>
-dsh web                                     # gateway auto-listens on 0.0.0.0:8642
+dsh web                                     # gateway listens on 0.0.0.0:8642
 ```
 
-## Why
+## What makes it different
 
-DSH's web server **intentionally refuses to bind anything but 127.0.0.1** — `dsh web --host 0.0.0.0` is rejected, because binding the harness (which can run arbitrary shell commands through its agent) to a network interface equals exposing remote code execution. DSH 0.2 then admits `/api` only when `Host` is loopback or listed in `trustedHosts`, `Origin` (when present) matches that Host, and `Sec-Fetch-Site` is not `cross-site`.
+**The trust fence stays on.** DSH 0.2 admits `/api` only when `Host` is loopback or listed in `trustedHosts`, a present `Origin` matches that Host, and `Sec-Fetch-Site` is not `cross-site`. This gateway forwards those headers unchanged and appends your public names to the connection row, beside the LAN addresses and `--trusted-host` values DSH already derived. A name you did not list is still refused. DNS rebinding and cross-site browser requests keep hitting the same check they hit locally.
 
-dsh-remote-gateway keeps DSH on loopback and forwards the browser's `Host`, `Origin`, and `Sec-Fetch-Site` unchanged. The bundle patch appends `remoteGateway.trustedHosts` onto the connection row, next to the LAN literals and `--trusted-host` values the web runtime already derived.
+**DSH never leaves loopback.** `dsh web --host 0.0.0.0` is rejected on purpose: the harness can run shell commands. The gateway is a separate listener (default `0.0.0.0:8642`) with its own password. Binding DSH to the network is still refused.
+
+**The whole GUI, including the live socket.** HTTP bodies are piped, not buffered, so large uploads and SSE pass through. WebSocket upgrades (`/api/events.mux`, `/api/events.host`) are raw bidirectional tunnels. There is no second UI and no pairing protocol to keep in sync with DSH releases.
+
+**Repeat visits are fast.** Upstream DSH sends no cache headers, so a remote browser re-downloads the JS/CSS bundle every time. The gateway adds a content-aware `Cache-Control` policy: hash-addressed assets are immutable for a year, other static files revalidate after five minutes, HTML is `no-store`.
+
+**It is a plugin, not a sidecar.** It starts and stops with `dsh web`, follows `--port 0`, and uses a soft inject so profiles without `webServer` still boot. A busy gateway port disables only the gateway. Runtime code is Node core (`node:http`, `node:crypto`, `node:net`, `node:tls`).
 
 ```
-remote browser ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, password auth)
+remote browser ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, password)
                                │  Host, Origin, Sec-Fetch-Site unchanged
                                ▼
                         DSH web (127.0.0.1:<dshPort>)
                         trustedHosts includes the public names
 ```
 
-## Features
+## Also included
 
-- **Plugin-native** — starts and stops with `dsh web`; no extra daemon, no supervisor, nothing to babysit. Follows dynamic ports (`--port 0`) automatically.
-- **Password gate in front of everything** — built-in login page, HMAC-SHA256-signed `HttpOnly; SameSite=Lax` session cookie (default 7d), `Authorization: Bearer <password>` for programmatic access. WebSocket upgrades are gated by the same session (browsers attach the cookie automatically).
-- **Static asset caching** — the upstream DSH web server sends no cache headers at all, so browsers re-download the entire JS/CSS bundle on every visit, which makes remote sessions feel sluggish. The gateway fills the gap with a safe, content-aware `Cache-Control` policy (see below). Repeat visits load from the browser cache: near-instant.
-- **Zero runtime dependencies** — plain Node core (`node:http`, `node:crypto`, `node:net`, `node:tls`); nothing to audit, nothing to break.
-- **True streaming** — request/response bodies are piped end to end, never buffered (DSH accepts request bodies up to 160 MiB; large uploads/downloads and SSE pass through untouched).
-- **WebSocket tunneling** — upgrades (`/api/events.mux`, `/api/events.host`) are bridged as raw bidirectional socket tunnels, so the live UI works exactly as locally.
-- **Hardened by default** — per-IP login rate limiting (10 attempts / 10 min), timing-safe password comparison, open-redirect guard on `next`, gateway session cookie never forwarded upstream, secrets stored `0600`.
+- Password page, HMAC-SHA256 `HttpOnly; SameSite=Lax` cookie (default 7 days), and `Authorization: Bearer` for scripts. WebSocket upgrades use the same session.
+- Per-IP login limit (10 attempts / 10 minutes), timing-safe password compare, open-redirect guard on `next`, gateway cookie withheld from upstream, secret file mode `0600`.
 
 ### Cache policy
 
 | Response | Policy |
 | --- | --- |
-| HTML | `no-store` — never cached; login state and UI freshness always correct |
-| Static assets addressed by content hash — hash-named paths (`/assets/`, `/dist/`, `/static/`, `/vendor/`, `/favicon`) or hash query params (`?rev=<hash>`, `?v=<hash>`, …) | `public, max-age=31536000, immutable` — cached for a year; the hash is part of the URL, so an upstream update ships a new URL and takes effect immediately (upstream `no-cache` on such URLs is overridden) |
-| Other static files (JS/CSS/images/fonts/wasm…, by content-type or extension) | `public, max-age=300` — short window, then revalidate |
-| Everything else (API, streams) | untouched |
+| HTML | `no-store` |
+| Hash-addressed assets — hash paths (`/assets/`, `/dist/`, `/static/`, `/vendor/`, `/favicon`) or hash query (`?rev=<hash>`, `?v=<hash>`, …) | `public, max-age=31536000, immutable` (overrides an upstream `no-cache`; a new hash is a new URL) |
+| Other static files (JS/CSS/images/fonts/wasm, by content-type or extension) | `public, max-age=300` |
+| API and streams | untouched |
 
-Applied only to successful (2xx/3xx) GET/HEAD responses; hash-addressed assets override an upstream `no-cache` (the hash makes it safe), everything else never overrides an upstream policy or `ETag`.
+Applied to successful (2xx/3xx) GET/HEAD only. Non-hash responses never override an upstream policy or `ETag`.
 
 ## Install
 
@@ -51,9 +52,9 @@ dsh plugin --profile web add link:/path/to/dsh-remote-gateway
 dsh web
 ```
 
-The plugin waits for the `webServer` service (soft inject, so non-web profiles keep booting) and starts the gateway once DSH is listening. If the gateway port is busy it disables itself with a log line and leaves DSH running. Peers match DSH 0.2: `@deepseek-ai/cordis@~4.0.4` and `@deepseek-ai/schemastery@~3.18.4`.
+Peers match DSH 0.2: `@deepseek-ai/cordis@~4.0.4` and `@deepseek-ai/schemastery@~3.18.4`.
 
-Password resolution order: plugin config `password` → `$DSH_REMOTE_GATEWAY_PASSWORD` (falls back to `$DSH_GATEWAY_PASSWORD`) → `~/.dsh-remote-gateway/secret` (falls back to `~/.dsh-gateway/secret`; auto-generated random password on first run, logged once, file mode 0600).
+Password resolution: plugin `password` → `$DSH_REMOTE_GATEWAY_PASSWORD` (then `$DSH_GATEWAY_PASSWORD`) → `~/.dsh-remote-gateway/secret` (then `~/.dsh-gateway/secret`). First run generates a random password, logs the path once, and writes the file as `0600`.
 
 ### Configuration
 
@@ -67,51 +68,39 @@ In the profile's `cordis.patch.yml`:
     port: 8642
     password: ""            # empty → resolution order above
     sessionTtlMs: 604800000 # 7 days
-    trustedHosts:           # public names browsers put in Host
+    trustedHosts:           # names browsers put in Host
       - harness.example
 ```
 
-A concrete non-loopback `host` is published automatically. `0.0.0.0` is not a client Host, so names and public IPs belong in `trustedHosts`. Port-less entries match any port; `host:port` is exact. A value that is not a bare authority fails plugin load.
+A concrete non-loopback bind address is published automatically. `0.0.0.0` is not a client Host, so DNS names and public IPs go in `trustedHosts`. A port-less entry matches any port; `host:port` is exact. A value that is not a bare authority fails plugin load.
 
-### Deployment shapes
+### In front of TLS
 
-- **Cloudflare Tunnel (recommended)** — point the `cloudflared` service URL at `http://127.0.0.1:8642`; TLS terminates at the edge. Works with any reverse proxy (Caddy, nginx, Traefik) the same way.
-- **LAN / VPS direct** — always put TLS in front (Caddy/nginx or a tunnel). Over plaintext HTTP the password and session cookie travel in cleartext.
+- **Cloudflare Tunnel** — point `cloudflared` at `http://127.0.0.1:8642`. Caddy, nginx, and Traefik work the same way: TLS ends at the proxy, the gateway stays on loopback or the LAN.
+- **LAN / VPS** — put TLS in front. Over plaintext HTTP the password and session cookie travel in cleartext.
 
-### Verified end-to-end
-
-The test suite (18 checks) covers the login flow, header forwarding (asserted upstream: `Host`, `Origin`, and `Sec-Fetch-Site` preserved, gateway cookie withheld), the cache policy (immutable / hash-query override / revalidate / no-store), streaming, the WebSocket tunnel handshake and echo round-trip, and the auth gate on upgrades:
-
-```sh
-pnpm install
-pnpm typecheck
-pnpm test
-```
+Put the name browsers actually send (`harness.example`, or `harness.example:443` when the port is part of the authority) into `trustedHosts`.
 
 ## How it works
 
 | Concern | Approach |
 | --- | --- |
-| Making DSH accept remote traffic | Proxy, not a bind change. Browser `Host` / `Origin` / `Sec-Fetch-Site` pass through. The connection row's `trustedHosts` is the web runtime list plus `remoteGateway.trustedHosts` |
-| Auth | scrypt-derived key signs expiring session tokens (`<exp>.<hmac>`), stored in an `HttpOnly` cookie; Bearer password for scripts |
-| WebSockets | Upgrades tunnel at the socket level — the gateway replays the handshake upstream and then pipes bytes both directions |
-| Caching | Content-aware `Cache-Control` injection: hash-path assets immutable for a year, other static files revalidate after 5 min, HTML always no-store; upstream cache headers and `ETag`s pass through untouched |
-| Lifetime | A cordis plugin keyed to the `webServer` service: listener registered as an effect, closed on fiber disposal; a busy port disables the gateway without touching DSH |
+| Remote admission | Browser `Host` / `Origin` / `Sec-Fetch-Site` pass through. `connection.trustedHosts` is the web-runtime list plus `remoteGateway.trustedHosts` |
+| Auth | scrypt-derived key signs `<exp>.<hmac>` session tokens |
+| WebSockets | Handshake replayed upstream, then a byte pipe in both directions |
+| Caching | Hash-addressed assets immutable for a year; other static files revalidate after 5 minutes; HTML is `no-store` |
+| Lifetime | Listener is a cordis effect on `webServer`; disposal closes it |
 
-## Relation to dsh-remote-web-ui
+## Security
 
-`@linxin666/dsh-remote-web-ui` is an application-layer solution (pairing/device management inside the DSH plugin system). dsh-remote-gateway is a **network-layer** one: a transport-level reverse proxy that remotizes the whole web GUI as-is, agnostic to DSH internals. The two can coexist; pick per scenario.
-
-## Security notes
-
-- The gateway grants everything a local DSH browser session has — including agent shell tools. Use a strong password (the auto-generated one is fine) and keep TLS in front.
-- Changing the password invalidates all sessions instantly (the signing key is scrypt-derived from it).
-- Never expose a plaintext gateway port to the public internet.
+- A logged-in gateway session is a local DSH browser session, including agent shell tools. Keep a strong password and TLS in front.
+- Changing the password invalidates every session (the signing key is derived from it).
+- Do not publish the plaintext gateway port on the internet.
 
 ## Requirements
 
 - Node.js >= 20
-- DSH (`@deepseek-ai/dsh`) with the `web` profile
+- DSH (`@deepseek-ai/dsh`) 0.2 with the `web` profile
 
 ## License
 
