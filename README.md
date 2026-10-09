@@ -1,31 +1,27 @@
-# dsh-gateway
+# dsh-remote-gateway
 
 [English](README.md) | [中文](README.zh.md)
 
-An authenticated reverse proxy for the [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI, packaged as a DSH plugin. It turns remote access into plain local traffic: remote sessions behave exactly like sitting at the machine.
+An authenticated reverse proxy for the [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI, packaged as a DSH plugin. Remote browsers keep their own `Host` and `Origin`; DSH 0.2 admits them through `trustedHosts`.
 
 ```sh
-dsh plugin --profile web add dsh-gateway   # or link:<local checkout>
+dsh plugin --profile web add dsh-remote-gateway   # or link:<local checkout>
 dsh web                                     # gateway auto-listens on 0.0.0.0:8642
 ```
 
 ## Why
 
-DSH's web server **intentionally refuses to bind anything but 127.0.0.1** — `dsh web --host 0.0.0.0` is rejected, because binding the harness (which can run arbitrary shell commands through its agent) to a network interface equals exposing remote code execution. On top of that, the `/api` layer runs a loopback trust fence that validates `Host` and `Origin` headers.
+DSH's web server **intentionally refuses to bind anything but 127.0.0.1** — `dsh web --host 0.0.0.0` is rejected, because binding the harness (which can run arbitrary shell commands through its agent) to a network interface equals exposing remote code execution. DSH 0.2 then admits `/api` only when `Host` is loopback or listed in `trustedHosts`, `Origin` (when present) matches that Host, and `Sec-Fetch-Site` is not `cross-site`.
 
-Both are good defaults. But sometimes you legitimately want to reach your own harness from your phone, another room, or another continent — over real TLS, with real authentication.
-
-dsh-gateway sits in front of both layers:
+dsh-remote-gateway keeps DSH on loopback and forwards the browser's `Host`, `Origin`, and `Sec-Fetch-Site` unchanged. The bundle patch appends `remoteGateway.trustedHosts` onto the connection row, next to the LAN literals and `--trusted-host` values the web runtime already derived.
 
 ```
-remote browser ──HTTPS──> dsh-gateway (0.0.0.0:8642, password auth)
-                               │  Host   ← 127.0.0.1:<dshPort>
-                               │  Origin ← stripped
+remote browser ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, password auth)
+                               │  Host, Origin, Sec-Fetch-Site unchanged
                                ▼
                         DSH web (127.0.0.1:<dshPort>)
+                        trustedHosts includes the public names
 ```
-
-Every forwarded request gets `Host` rewritten to the local target and `Origin` stripped, so DSH's fence treats each remote request as a plain local one — indistinguishable from a browser opened on the machine itself.
 
 ## Features
 
@@ -51,13 +47,13 @@ Applied only to successful (2xx/3xx) GET/HEAD responses; hash-addressed assets o
 ## Install
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-gateway
+dsh plugin --profile web add link:/path/to/dsh-remote-gateway
 dsh web
 ```
 
-The plugin injects the `webServer` service and starts the gateway once DSH is listening. If the gateway port is busy it disables itself with a log line and leaves DSH running.
+The plugin waits for the `webServer` service (soft inject, so non-web profiles keep booting) and starts the gateway once DSH is listening. If the gateway port is busy it disables itself with a log line and leaves DSH running. Peers match DSH 0.2: `@deepseek-ai/cordis@~4.0.4` and `@deepseek-ai/schemastery@~3.18.4`.
 
-Password resolution order: plugin config `password` → `$DSH_GATEWAY_PASSWORD` → `~/.dsh-gateway/secret` (auto-generated random password on first run, logged once, file mode 0600).
+Password resolution order: plugin config `password` → `$DSH_REMOTE_GATEWAY_PASSWORD` (falls back to `$DSH_GATEWAY_PASSWORD`) → `~/.dsh-remote-gateway/secret` (falls back to `~/.dsh-gateway/secret`; auto-generated random password on first run, logged once, file mode 0600).
 
 ### Configuration
 
@@ -71,7 +67,11 @@ In the profile's `cordis.patch.yml`:
     port: 8642
     password: ""            # empty → resolution order above
     sessionTtlMs: 604800000 # 7 days
+    trustedHosts:           # public names browsers put in Host
+      - harness.example
 ```
+
+A concrete non-loopback `host` is published automatically. `0.0.0.0` is not a client Host, so names and public IPs belong in `trustedHosts`. Port-less entries match any port; `host:port` is exact. A value that is not a bare authority fails plugin load.
 
 ### Deployment shapes
 
@@ -80,7 +80,7 @@ In the profile's `cordis.patch.yml`:
 
 ### Verified end-to-end
 
-The test suite (18 checks) covers the login flow, header rewrites (asserted upstream: `Host` rewritten, `Origin` stripped, gateway cookie withheld), the cache policy (immutable / hash-query override / revalidate / no-store), streaming, the WebSocket tunnel handshake and echo round-trip, and the auth gate on upgrades:
+The test suite (18 checks) covers the login flow, header forwarding (asserted upstream: `Host`, `Origin`, and `Sec-Fetch-Site` preserved, gateway cookie withheld), the cache policy (immutable / hash-query override / revalidate / no-store), streaming, the WebSocket tunnel handshake and echo round-trip, and the auth gate on upgrades:
 
 ```sh
 pnpm install
@@ -92,7 +92,7 @@ pnpm test
 
 | Concern | Approach |
 | --- | --- |
-| Making DSH accept remote traffic | Proxy, not a bind change: DSH stays on loopback; `Host` is rewritten to `127.0.0.1:<port>` and `Origin` is dropped, so the loopback fence sees plain local requests |
+| Making DSH accept remote traffic | Proxy, not a bind change. Browser `Host` / `Origin` / `Sec-Fetch-Site` pass through. The connection row's `trustedHosts` is the web runtime list plus `remoteGateway.trustedHosts` |
 | Auth | scrypt-derived key signs expiring session tokens (`<exp>.<hmac>`), stored in an `HttpOnly` cookie; Bearer password for scripts |
 | WebSockets | Upgrades tunnel at the socket level — the gateway replays the handshake upstream and then pipes bytes both directions |
 | Caching | Content-aware `Cache-Control` injection: hash-path assets immutable for a year, other static files revalidate after 5 min, HTML always no-store; upstream cache headers and `ETag`s pass through untouched |
@@ -100,7 +100,7 @@ pnpm test
 
 ## Relation to dsh-remote-web-ui
 
-`@linxin666/dsh-remote-web-ui` is an application-layer solution (pairing/device management inside the DSH plugin system). dsh-gateway is a **network-layer** one: a transport-level reverse proxy that remotizes the whole web GUI as-is, agnostic to DSH internals. The two can coexist; pick per scenario.
+`@linxin666/dsh-remote-web-ui` is an application-layer solution (pairing/device management inside the DSH plugin system). dsh-remote-gateway is a **network-layer** one: a transport-level reverse proxy that remotizes the whole web GUI as-is, agnostic to DSH internals. The two can coexist; pick per scenario.
 
 ## Security notes
 

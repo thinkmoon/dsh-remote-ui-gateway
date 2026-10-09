@@ -1,31 +1,27 @@
-# dsh-gateway
+# dsh-remote-gateway
 
 [English](README.md) | [中文](README.zh.md)
 
-[DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI 的认证反向代理，以 DSH 插件形式提供。它把远程访问完全变成"本地请求"：远程会话与坐在机器前使用毫无区别。
+[DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI 的认证反向代理，以 DSH 插件形式提供。远程浏览器保留自己的 `Host` 与 `Origin`，由 DSH 0.2 的 `trustedHosts` 放行。
 
 ```sh
-dsh plugin --profile web add dsh-gateway   # 或 link:<本地目录>
+dsh plugin --profile web add dsh-remote-gateway   # 或 link:<本地目录>
 dsh web                                     # gateway 自动监听 0.0.0.0:8642
 ```
 
 ## 为什么需要它
 
-DSH 的 web 服务**有意只允许绑定 127.0.0.1** —— `dsh web --host 0.0.0.0` 会被直接拒绝，因为把一个能通过 agent 执行任意 shell 命令的 harness 绑到网络接口上，等同于把远程代码执行暴露出去。在此之上，`/api` 层还有一道校验 `Host` 与 `Origin` 的 loopback 信任护栏。
+DSH 的 web 服务**有意只允许绑定 127.0.0.1** —— `dsh web --host 0.0.0.0` 会被直接拒绝，因为把一个能通过 agent 执行任意 shell 命令的 harness 绑到网络接口上，等同于把远程代码执行暴露出去。DSH 0.2 的 `/api` 只在 `Host` 为 loopback 或列入 `trustedHosts`、附带的 `Origin` 与该 Host 一致、且 `Sec-Fetch-Site` 不是 `cross-site` 时放行。
 
-这些都是正确的默认值。但有时候你确实想从手机、另一个房间或另一个大陆访问自己的 harness —— 走真正的 TLS、真正的认证。
-
-dsh-gateway 站在这两层前面：
+dsh-remote-gateway 让 DSH 继续绑在 loopback，并原样转发浏览器的 `Host`、`Origin` 与 `Sec-Fetch-Site`。bundle patch 把 `remoteGateway.trustedHosts` 追加到 connection 行，与 web runtime 已推导的 LAN 地址和 `--trusted-host` 并列。
 
 ```
-远程浏览器 ──HTTPS──> dsh-gateway (0.0.0.0:8642, 密码认证)
-                           │  Host   ← 127.0.0.1:<dshPort>
-                           │  Origin ← 剥除
+远程浏览器 ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, 密码认证)
+                           │  Host、Origin、Sec-Fetch-Site 原样转发
                            ▼
                     DSH web (127.0.0.1:<dshPort>)
+                    trustedHosts 包含对外主机名
 ```
-
-所有转发请求的 `Host` 被改写为本地目标、`Origin` 被剥除，DSH 的信任护栏因此把每一条远程流量都当成无浏览器标记的本地请求 —— 与在本机打开浏览器无法区分。
 
 ## 特性
 
@@ -51,13 +47,13 @@ dsh-gateway 站在这两层前面：
 ## 安装
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-gateway
+dsh plugin --profile web add link:/path/to/dsh-remote-gateway
 dsh web
 ```
 
-插件注入 `webServer` 服务，DSH 监听后自动启动 gateway。端口被占用时只禁用 gateway 并记日志，不影响 DSH 本体。
+插件以软注入等待 `webServer`（没有 web 服务的 profile 不会卡住启动），DSH 监听后自动启动 gateway。端口被占用时只禁用 gateway 并记日志，不影响 DSH 本体。peer 对齐 DSH 0.2：`@deepseek-ai/cordis@~4.0.4`、`@deepseek-ai/schemastery@~3.18.4`。
 
-密码解析顺序：插件配置 `password` → `$DSH_GATEWAY_PASSWORD` → `~/.dsh-gateway/secret`（首次运行自动生成随机密码并记入日志，文件权限 0600）。
+密码解析顺序：插件配置 `password` → `$DSH_REMOTE_GATEWAY_PASSWORD`（回退 `$DSH_GATEWAY_PASSWORD`）→ `~/.dsh-remote-gateway/secret`（回退 `~/.dsh-gateway/secret`；首次运行自动生成随机密码并记入日志，文件权限 0600）。
 
 ### 配置
 
@@ -71,7 +67,11 @@ dsh web
     port: 8642
     password: ""            # 留空 → 走上文解析顺序
     sessionTtlMs: 604800000 # 7 天
+    trustedHosts:           # 浏览器 Host 里会出现的对外名字
+      - harness.example
 ```
+
+具体的非 loopback `host` 会自动发布。`0.0.0.0` 不是客户端 Host，域名和公网 IP 写在 `trustedHosts`。不带端口的条目匹配任意端口，`host:port` 精确匹配。不是裸 authority 的值会让插件加载失败。
 
 ### 部署形态
 
@@ -80,7 +80,7 @@ dsh web
 
 ### 端到端验证
 
-测试套件（18 项）覆盖登录流、头部改写（在上游断言：`Host` 已改写、`Origin` 已剥除、网关 cookie 未下发）、缓存策略（immutable / hash 查询参数覆盖 / 复验证 / no-store）、流式转发、WebSocket 隧道握手与回显往返、upgrade 的认证门：
+测试套件（18 项）覆盖登录流、头部转发（在上游断言：`Host`、`Origin`、`Sec-Fetch-Site` 原样保留、网关 cookie 未下发）、缓存策略（immutable / hash 查询参数覆盖 / 复验证 / no-store）、流式转发、WebSocket 隧道握手与回显往返、upgrade 的认证门：
 
 ```sh
 pnpm install
@@ -92,7 +92,7 @@ pnpm test
 
 | 关注点 | 做法 |
 | --- | --- |
-| 让 DSH 接受远程流量 | 代理而非改绑定：DSH 保持 loopback；`Host` 改写为 `127.0.0.1:<port>`、`Origin` 丢弃，loopback 护栏看到的就是纯本地请求 |
+| 让 DSH 接受远程流量 | 代理而非改绑定。浏览器的 `Host` / `Origin` / `Sec-Fetch-Site` 原样转发。connection 的 `trustedHosts` 是 web runtime 列表再加上 `remoteGateway.trustedHosts` |
 | 认证 | scrypt 派生密钥签名带过期时间的会话令牌（`<exp>.<hmac>`），存 `HttpOnly` cookie；脚本用 Bearer 密码 |
 | WebSocket | upgrade 在 socket 层隧道：网关向上游重放握手，之后字节双向管道 |
 | 缓存 | 按内容分类注入 `Cache-Control`：hash 路径资源 immutable 一年、其他静态文件 5 分钟复验证、HTML 恒为 no-store；上游缓存头与 `ETag` 原样透传不覆盖 |
@@ -100,7 +100,7 @@ pnpm test
 
 ## 与 dsh-remote-web-ui 的关系
 
-`@linxin666/dsh-remote-web-ui` 是应用层方案（DSH 插件体系内的 pairing/设备管理）；dsh-gateway 是**网络层**方案：传输层反向代理，把整个 web GUI 原样远程化，不依赖 DSH 内部实现。两者可共存，按场景择一。
+`@linxin666/dsh-remote-web-ui` 是应用层方案（DSH 插件体系内的 pairing/设备管理）；dsh-remote-gateway 是**网络层**方案：传输层反向代理，把整个 web GUI 原样远程化，不依赖 DSH 内部实现。两者可共存，按场景择一。
 
 ## 安全注意
 

@@ -27,7 +27,7 @@ export function loginPage({ next, error, cookieName }) {
     <label for="password">Password / 访问密码</label>
     <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
     <button type="submit">Unlock / 解锁</button>
-    <footer>${escapeHtml(cookieName)} session · dsh-gateway</footer>
+    <footer>${escapeHtml(cookieName)} session · dsh-remote-gateway</footer>
   </form>
 </body>
 </html>`;
@@ -65,7 +65,7 @@ const PAGE_STYLE = `
 `;
 
 export const LOGOUT_PAGE = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>Bye · dsh-gateway</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Bye · dsh-remote-gateway</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0d12;color:#e7eaf0;font:15px/1.6 ui-sans-serif,system-ui,sans-serif}</style>
 </head><body><div>已退出登录 · signed out</div></body></html>`;

@@ -139,7 +139,7 @@ export function createGateway(options) {
       res.end();
       return;
     }
-    res.writeHead(401, { "www-authenticate": 'Bearer realm="dsh-gateway"', "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    res.writeHead(401, { "www-authenticate": 'Bearer realm="dsh-remote-gateway"', "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify({ error: "unauthorized" }));
   };
 
@@ -227,7 +227,7 @@ export function createGateway(options) {
     }
     if (url.pathname === "/_gw" || url.pathname === "/_gw/") {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      res.end("dsh-gateway: reserved namespace\n");
+      res.end("dsh-remote-gateway: reserved namespace\n");
       return;
     }
     if (!isAuthed(req)) {
@@ -259,7 +259,7 @@ export function createGateway(options) {
     handler(req, res).catch(() => {
       if (!res.headersSent) {
         res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-        res.end("dsh-gateway: internal error");
+        res.end("dsh-remote-gateway: internal error");
       } else {
         res.destroy();
       }

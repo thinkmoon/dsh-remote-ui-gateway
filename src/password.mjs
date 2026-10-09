@@ -7,25 +7,37 @@ import { randomPassword } from "./auth.mjs";
  * @returns {string}
  */
 export function secretFilePath() {
+  return path.join(homedir(), ".dsh-remote-gateway", "secret");
+}
+
+/**
+ * Previous install location, read when the renamed file is absent.
+ * @returns {string}
+ */
+function legacySecretFilePath() {
   return path.join(homedir(), ".dsh-gateway", "secret");
 }
 
 /**
- * Resolve the gateway password: explicit value, then DSH_GATEWAY_PASSWORD,
- * then the persisted secret file (auto-generated on first run, mode 0600).
+ * Resolve the gateway password: explicit value, then DSH_REMOTE_GATEWAY_PASSWORD
+ * (or the previous DSH_GATEWAY_PASSWORD), then the persisted secret file
+ * (auto-generated on first run, mode 0600). A secret written by the old
+ * `dsh-gateway` name is reused when the new file does not exist yet.
  * @param {string | undefined} explicit
  * @returns {{ password: string, generated: boolean, file: string }}
  */
 export function resolveStoredPassword(explicit) {
   if (typeof explicit === "string" && explicit.length > 0) return { password: explicit, generated: false, file: secretFilePath() };
-  const env = process.env.DSH_GATEWAY_PASSWORD;
+  const env = process.env.DSH_REMOTE_GATEWAY_PASSWORD || process.env.DSH_GATEWAY_PASSWORD;
   if (env !== undefined && env !== "") return { password: env, generated: false, file: secretFilePath() };
-  const file = secretFilePath();
-  if (existsSync(file) && statSync(file).isFile()) {
-    const secret = readFileSync(file, "utf8").replace(/\r?\n$/, "");
-    if (secret.length > 0) return { password: secret, generated: false, file };
+  for (const file of [secretFilePath(), legacySecretFilePath()]) {
+    if (existsSync(file) && statSync(file).isFile()) {
+      const secret = readFileSync(file, "utf8").replace(/\r?\n$/, "");
+      if (secret.length > 0) return { password: secret, generated: false, file };
+    }
   }
   const secret = randomPassword();
+  const file = secretFilePath();
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, secret + "\n", { mode: 0o600 });
   chmodSync(file, 0o600);

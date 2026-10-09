@@ -55,6 +55,7 @@ const upstream = http.createServer((req, res) => {
       JSON.stringify({
         host: req.headers.host,
         origin: req.headers.origin ?? null,
+        secFetchSite: req.headers["sec-fetch-site"] ?? null,
         cookie: req.headers.cookie ?? null,
         xff: req.headers["x-forwarded-for"] ?? null,
         url: req.url,
@@ -108,6 +109,7 @@ upstream.on("upgrade", (req, socket) => {
   lastUpgradeHeaders = {
     host: req.headers.host,
     origin: req.headers.origin ?? null,
+    secFetchSite: req.headers["sec-fetch-site"] ?? null,
     cookie: req.headers.cookie ?? null,
     path: req.url,
   };
@@ -146,7 +148,7 @@ function rawUpgrade(port, pathname, { cookie } = {}) {
     });
     socket.on("connect", () => {
       const key = randomBytes(16).toString("base64");
-      let raw = `GET ${pathname} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: http://127.0.0.1:${port}\r\n`;
+      let raw = `GET ${pathname} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: http://127.0.0.1:${port}\r\nSec-Fetch-Site: cross-site\r\n`;
       if (cookie) raw += `Cookie: ${cookie}\r\n`;
       raw += "\r\n";
       socket.write(raw);
@@ -239,14 +241,17 @@ async function main() {
   assert.equal(evilLogin.headers.get("location"), "/");
   ok("open-redirect guard on next parameter");
 
-  const echoed = await fetch(base + "/echo", { headers: { cookie: `${cookie}; x=1` } });
+  const echoed = await fetch(base + "/echo", {
+    headers: { cookie: `${cookie}; x=1`, origin: base, "sec-fetch-site": "cross-site" },
+  });
   assert.equal(echoed.status, 200);
   const echo = await echoed.json();
-  assert.equal(echo.host, `127.0.0.1:${upstreamPort}`);
-  assert.equal(echo.origin, null);
+  assert.equal(echo.host, `127.0.0.1:${port}`);
+  assert.equal(echo.origin, base);
+  assert.equal(echo.secFetchSite, "cross-site");
   assert.equal(echo.cookie, "x=1");
   assert.match(echo.xff ?? "", /127\.0\.0\.1/);
-  ok("proxied request looks local: Host rewritten, Origin stripped, gateway cookie withheld");
+  ok("proxied request keeps browser Host, Origin, and Sec-Fetch-Site; gateway cookie withheld");
 
   const bearer = await fetch(base + "/echo", { headers: { authorization: `Bearer ${PASSWORD}` } });
   assert.equal(bearer.status, 200);
@@ -301,10 +306,11 @@ async function main() {
   ok("WebSocket client frames tunnel back (echo round-trip)");
 
   const upstreamSaw = await (await fetch(`http://127.0.0.1:${upstreamPort}/_last-upgrade`)).json();
-  assert.equal(upstreamSaw.host, `127.0.0.1:${upstreamPort}`);
-  assert.equal(upstreamSaw.origin, null);
+  assert.equal(upstreamSaw.host, `127.0.0.1:${port}`);
+  assert.equal(upstreamSaw.origin, `http://127.0.0.1:${port}`);
+  assert.equal(upstreamSaw.secFetchSite, "cross-site");
   assert.equal(upstreamSaw.path, "/api/events.mux");
-  ok("upgrade request reaches DSH-looking local: Host rewritten, Origin stripped");
+  ok("upgrade keeps browser Host, Origin, and Sec-Fetch-Site");
 
   ws.socket.destroy();
   gateway.close();

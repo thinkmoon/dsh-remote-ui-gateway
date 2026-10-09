@@ -20,21 +20,6 @@ const HOP_BY_HOP = new Set([
 ]);
 
 /**
- * @param {URL} target
- * @returns {string}
- */
-export function targetAuthority(target) {
-  const { hostname, port, protocol } = target;
-  const defaultPort = protocol === "https:" ? 443 : 80;
-  const portNum = Number(port) || defaultPort;
-  const needsPort = portNum !== defaultPort;
-  if (hostname.includes(":")) {
-    return needsPort ? `[${hostname}]:${portNum}` : `[${hostname}]`;
-  }
-  return needsPort ? `${hostname}:${portNum}` : hostname;
-}
-
-/**
  * @param {string | string[] | undefined} value
  * @returns {string | undefined}
  */
@@ -69,17 +54,16 @@ function splitCookieWithout(header, dropName) {
 /**
  * @param {IncomingMessage} req
  * @param {object} options
- * @param {URL} options.target
  * @param {string} options.cookieName
  * @param {string} options.proto
  * @returns {import("node:http").OutgoingHttpHeaders}
  */
-export function forwardRequestHeaders(req, { target, cookieName, proto }) {
+export function forwardRequestHeaders(req, { cookieName, proto }) {
   /** @type {import("node:http").OutgoingHttpHeaders} */
   const headers = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (HOP_BY_HOP.has(name)) continue;
-    if (name === "host" || name === "origin" || name === "expect") continue;
+    if (name === "expect") continue;
     if (name === "cookie" && cookieName) {
       const kept = splitCookieWithout(typeof value === "string" ? value : undefined, cookieName);
       if (kept !== undefined) headers.cookie = kept;
@@ -88,8 +72,9 @@ export function forwardRequestHeaders(req, { target, cookieName, proto }) {
     const joined = joinValue(value);
     if (joined !== undefined) headers[name] = joined;
   }
-  headers.host = targetAuthority(target);
-  headers["x-forwarded-host"] = joinValue(req.headers.host) ?? targetAuthority(target);
+  const host = joinValue(req.headers.host);
+  if (host !== undefined) headers.host = host;
+  headers["x-forwarded-host"] = host;
   headers["x-forwarded-for"] = appendList(joinValue(req.headers["x-forwarded-for"]), String(req.socket.remoteAddress));
   headers["x-forwarded-proto"] = proto;
   return headers;
@@ -98,16 +83,14 @@ export function forwardRequestHeaders(req, { target, cookieName, proto }) {
 /**
  * @param {IncomingMessage} req
  * @param {object} options
- * @param {URL} options.target
  * @param {string} options.cookieName
  * @returns {Record<string, string>}
  */
-export function forwardUpgradeHeaders(req, { target, cookieName }) {
+export function forwardUpgradeHeaders(req, { cookieName }) {
   /** @type {Record<string, string>} */
   const headers = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (HOP_BY_HOP.has(name)) continue;
-    if (name === "host" || name === "origin") continue;
     if (name === "cookie" && cookieName) {
       const kept = splitCookieWithout(typeof value === "string" ? value : undefined, cookieName);
       if (kept !== undefined) headers.cookie = kept;
@@ -116,7 +99,8 @@ export function forwardUpgradeHeaders(req, { target, cookieName }) {
     const joined = joinValue(value);
     if (joined !== undefined) headers[name] = joined;
   }
-  headers.host = targetAuthority(target);
+  const host = joinValue(req.headers.host);
+  if (host !== undefined) headers.host = host;
   headers.connection = "Upgrade";
   const upgrade = joinValue(req.headers.upgrade);
   if (upgrade !== undefined) headers.upgrade = upgrade;
@@ -205,7 +189,7 @@ export function createHttpForwarder(target, { cookieName, onError }) {
   const agent = new transport.Agent({ keepAlive: true, maxSockets: 64 });
   return function forward(req, res) {
     const proto = req.socket instanceof tls.TLSSocket ? "https" : "http";
-    const headers = forwardRequestHeaders(req, { target, cookieName, proto });
+    const headers = forwardRequestHeaders(req, { cookieName, proto });
     const upstream = transport.request(
       {
         hostname: target.hostname,
@@ -239,7 +223,7 @@ export function createHttpForwarder(target, { cookieName, onError }) {
       } else {
         onError?.(req, err);
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
-        res.end(`dsh-gateway: upstream unreachable (${errnoOf(err)})`);
+        res.end(`dsh-remote-gateway: upstream unreachable (${errnoOf(err)})`);
       }
     });
     req.on("aborted", () => upstream.destroy());
@@ -287,7 +271,7 @@ export function createUpgradeTunneler(target, { cookieName, onError }) {
     upstream.on("close", () => socket.destroy());
     socket.on("close", () => upstream.destroy());
     upstream.on("connect", () => {
-      const headers = forwardUpgradeHeaders(req, { target, cookieName });
+      const headers = forwardUpgradeHeaders(req, { cookieName });
       let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
       for (const [name, value] of Object.entries(headers)) {
         raw += `${name}: ${value}\r\n`;
