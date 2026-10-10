@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -11,6 +12,7 @@ import {
   verifySession,
 } from "./auth.mjs";
 import { LOGOUT_PAGE, loginPage } from "./login-page.mjs";
+import { settlePairing } from "./pair-bridge.mjs";
 import { createHttpForwarder, createUpgradeTunneler } from "./proxy.mjs";
 
 /** @typedef {import("node:http").IncomingMessage} IncomingMessage */
@@ -36,6 +38,7 @@ function errnoOf(err) {
  * @property {Buffer} sessionKey
  * @property {number} sessionTtlMs
  * @property {string} [cookieName]
+ * @property {string | (() => string | undefined)} [dshLaunchToken]
  * @property {Buffer} [tlsCert]
  * @property {Buffer} [tlsKey]
  * @property {(level: string, message: string) => void} [log]
@@ -99,6 +102,7 @@ function wantsHtml(req) {
 export function createGateway(options) {
   const { target, password, sessionTtlMs, log = () => {} } = options;
   const cookieName = options.cookieName ?? DEFAULT_COOKIE_NAME;
+  const dshLaunchToken = options.dshLaunchToken;
   const secureCookie = Boolean(options.tlsCert && options.tlsKey);
   const key = options.sessionKey;
   const allowLogin = createRateLimiter(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS);
@@ -110,6 +114,64 @@ export function createGateway(options) {
     cookieName,
     onError: (req, err) => log("warn", `upstream upgrade ${req.url} -> ${errnoOf(err)}`),
   });
+
+  /** @returns {string | undefined} */
+  const currentDshToken = () => {
+    const value = typeof dshLaunchToken === "function" ? dshLaunchToken() : dshLaunchToken;
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+  };
+
+  /**
+   * Exchange the process launch token inside the gateway. DSH binds the
+   * resulting cookie to this request's Host. The token changes every start
+   * and never reaches the browser.
+   * @param {string} hostHeader
+   * @returns {Promise<string[]>}
+   */
+  const mintDshAuthCookies = (hostHeader) => {
+    const token = currentDshToken();
+    if (token === undefined) return Promise.resolve([]);
+    return new Promise((resolve) => {
+      const req = http.request(
+        {
+          hostname: target.hostname,
+          port: target.port,
+          method: "GET",
+          path: `/?token=${encodeURIComponent(token)}`,
+          headers: { host: hostHeader, accept: "text/html" },
+        },
+        (res) => {
+          res.resume();
+          const raw = res.headers["set-cookie"];
+          resolve(raw === undefined ? [] : Array.isArray(raw) ? raw : [raw]);
+        },
+      );
+      req.on("error", () => resolve([]));
+      req.end();
+    });
+  };
+
+  /**
+   * @param {IncomingMessage} req
+   * @param {URL} url
+   * @returns {boolean}
+   */
+  const needsDshToken = (req, url) => {
+    if (currentDshToken() === undefined) return false;
+    if (req.method !== "GET" && req.method !== "HEAD") return false;
+    if (url.pathname !== "/") return false;
+    const host = req.headers.host;
+    if (typeof host !== "string") return true;
+    let authority;
+    try {
+      authority = new URL(`http://${host}`).host;
+    } catch {
+      return true;
+    }
+    const name = "dsh-auth-" + createHash("sha256").update(authority).digest().toString("base64url");
+    const cookie = req.headers.cookie;
+    return typeof cookie !== "string" || !cookie.split(";").some((part) => part.trim().startsWith(name + "="));
+  };
 
   /**
    * @param {string} token
@@ -186,7 +248,12 @@ export function createGateway(options) {
     }
     const token = signSession(key, sessionTtlMs);
     log("info", `login ok from ${clientIp(req)}`);
-    res.writeHead(303, { location: next, "set-cookie": sessionCookie(token, Math.floor(sessionTtlMs / 1000)), "cache-control": "no-store" });
+    /** @type {string[]} */
+    const cookies = [sessionCookie(token, Math.floor(sessionTtlMs / 1000))];
+    const pairing = await settlePairing(target, req.headers.cookie);
+    if (pairing?.cookie !== undefined) cookies.push(pairing.cookie);
+    if (typeof req.headers.host === "string") cookies.push(...await mintDshAuthCookies(req.headers.host));
+    res.writeHead(303, { location: next, "set-cookie": cookies, "cache-control": "no-store" });
     res.end();
   };
 
@@ -234,6 +301,33 @@ export function createGateway(options) {
       log("info", `deny ${req.method} ${req.url} from ${clientIp(req)}`);
       unauthorized(req, res);
       return;
+    }
+    if ((req.method === "GET" || req.method === "HEAD") && (url.pathname === "/api/pair/status" || url.pathname.endsWith("/api/pair/status"))) {
+      const pairing = await settlePairing(target, req.headers.cookie);
+      if (pairing !== undefined) {
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          ...(pairing.cookie === undefined ? {} : { "set-cookie": pairing.cookie }),
+        });
+        res.end(req.method === "HEAD" ? undefined : JSON.stringify(pairing.body));
+        return;
+      }
+    }
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/") {
+      /** @type {string[]} */
+      const cookies = [];
+      const cookieHeader = req.headers.cookie;
+      if (typeof cookieHeader !== "string" || !cookieHeader.includes("dsh_pair=")) {
+        const pairing = await settlePairing(target, cookieHeader);
+        if (pairing?.cookie !== undefined) cookies.push(pairing.cookie);
+      }
+      if (needsDshToken(req, url) && typeof req.headers.host === "string") cookies.push(...await mintDshAuthCookies(req.headers.host));
+      if (cookies.length > 0) {
+        res.writeHead(302, { location: url.pathname + url.search, "set-cookie": cookies, "cache-control": "no-store" });
+        res.end();
+        return;
+      }
     }
     res.on("close", () => log("info", `${req.method} ${req.url} ${res.statusCode} ${clientIp(req)}`));
     forward(req, res);

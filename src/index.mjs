@@ -38,6 +38,16 @@ export function apply(ctx, config = Config({})) {
   const logger = /** @type {any} */ (ctx).logger("dsh-remote-gateway");
   const trustedHosts = config.enabled ? collectTrustedHosts(config.trustedHosts, config.host) : [];
   /** @type {any} */ (ctx).provide("remoteGateway", { trustedHosts });
+  /** @type {any} */ (ctx).inject(["connection"], (/** @type {any} */ connectionCtx) => {
+    const list = connectionCtx.connection?.trustedHosts;
+    if (!Array.isArray(list)) {
+      logger.warn("connection.trustedHosts is not a list; remote names were not published");
+      return;
+    }
+    for (const host of trustedHosts) {
+      if (!list.includes(host)) list.push(host);
+    }
+  });
   if (!config.enabled) {
     logger.info("disabled by config");
     return;
@@ -47,15 +57,25 @@ export function apply(ctx, config = Config({})) {
   }
   // Soft inject: web profiles provide webServer; headless/desktop profiles do not.
   // A static inject would stall the fiber on those profiles (DSH 0.2+).
-  /** @type {any} */ (ctx).inject(["webServer"], async (/** @type {GatewayContext} */ webCtx) => {
+  /** @type {any} */ (ctx).inject(["webServer", "connection"], async (/** @type {GatewayContext & { connection?: { authenticatedUrl?: (url: string) => string } }} */ webCtx) => {
     const webPort = webCtx.webServer?.port;
     if (webPort === undefined) {
       throw new Error("dsh-remote-gateway: webServer is not listening (no port)");
     }
     const { password, generated, file } = resolveStoredPassword(config.password);
+    const dshLaunchToken = () => {
+      try {
+        const authenticated = webCtx.connection?.authenticatedUrl?.("http://127.0.0.1/");
+        if (typeof authenticated !== "string") return undefined;
+        return new URL(authenticated).searchParams.get("token") ?? undefined;
+      } catch {
+        return undefined;
+      }
+    };
     const server = createGateway({
       target: new URL(`http://127.0.0.1:${webPort}`),
       password,
+      dshLaunchToken,
       sessionKey: sessionKey(password),
       sessionTtlMs: config.sessionTtlMs,
       log: (level, message) => {

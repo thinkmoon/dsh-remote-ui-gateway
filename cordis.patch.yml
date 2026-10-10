@@ -3,13 +3,9 @@
 #   dsh plugin --profile <name> add link:/path/to/dsh-remote-gateway
 #
 # The gateway forwards the browser Host and Origin unchanged. DSH 0.2 admits
-# a non-loopback Host only when it is listed on the connection row. This layer
-# appends remoteGateway.trustedHosts to the authorities web-runtime already
-# derived (LAN literals and --trusted-host).
+# a non-loopback Host only when it is listed on the connection service. The
+# plugin appends remoteGateway.trustedHosts onto that list at runtime: the
+# plugin installer parses this file with stock YAML, which rejects !!js.
 - insert:
     - id: web-gateway
       name: 'dsh-remote-gateway'
-- id: connection
-  inject: [webRuntime, remoteGateway]
-  config:
-    trustedHosts: !!js [...ctx.webRuntime.trustedHosts, ...ctx.remoteGateway.trustedHosts]

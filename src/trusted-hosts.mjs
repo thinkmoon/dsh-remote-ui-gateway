@@ -1,7 +1,13 @@
+import { networkInterfaces } from "node:os";
+
 /**
  * Authorities handed to DSH's `connection.trustedHosts`.
  * A port-less name matches any port; `host:port` is exact.
  * Shape matches client-connection 0.2: bare canonical authority only.
+ *
+ * An all-interfaces bind publishes each non-loopback IPv4 address, so a LAN
+ * browser's Host is already trusted. Cloudflare (and any other public name)
+ * is an extra configured entry on the same list.
  * @param {string[]} configured
  * @param {string} bindHost
  * @returns {string[]}
@@ -9,13 +15,40 @@
 export function collectTrustedHosts(configured, bindHost) {
   /** @type {string[]} */
   const hosts = [];
-  const bind = implicitBindAuthority(bindHost);
-  if (bind !== undefined) hosts.push(bind);
+  for (const entry of implicitAuthorities(bindHost)) pushHost(hosts, entry);
   for (const entry of configured) {
     assertTrustedAuthority(entry);
-    if (!hosts.includes(entry)) hosts.push(entry);
+    pushHost(hosts, entry);
   }
   return hosts;
+}
+
+/**
+ * @param {string[]} hosts
+ * @param {string} entry
+ */
+function pushHost(hosts, entry) {
+  if (!hosts.includes(entry)) hosts.push(entry);
+}
+
+/**
+ * @param {string} bindHost
+ * @returns {string[]}
+ */
+function implicitAuthorities(bindHost) {
+  if (bindHost === "0.0.0.0" || bindHost === "::" || bindHost === "[::]") return lanIpv4Addresses();
+  const bind = implicitBindAuthority(bindHost);
+  return bind === undefined ? [] : [bind];
+}
+
+/**
+ * @returns {string[]}
+ */
+function lanIpv4Addresses() {
+  return Object.values(networkInterfaces())
+    .flat()
+    .filter((iface) => iface !== undefined && iface.family === "IPv4" && !iface.internal)
+    .map((iface) => iface.address);
 }
 
 /**

@@ -11,7 +11,11 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 
 ## 亮点
 
-**信任护栏继续生效。** DSH 0.2 的 `/api` 只在 `Host` 为 loopback 或列入 `trustedHosts`、附带的 `Origin` 与该 Host 一致、且 `Sec-Fetch-Site` 不是 `cross-site` 时放行。本网关原样转发这些头，并把你声明的对外名字追加到 connection 行，与 DSH 已经推导的 LAN 地址、`--trusted-host` 并列。没写进名单的主机名仍然 403。DNS 重绑定和跨站浏览器请求打到的是同一道检查。
+**网关自己有一套认证，挡在 DSH 前面。** 远程流量先过登录页或 `Authorization: Bearer`。通过后才拿到网关自己的会话：密码经 scrypt 派生密钥，HMAC-SHA256 签出带过期时间的 `HttpOnly; SameSite=Lax` cookie（默认 7 天）。这张 cookie 不会转发给 DSH，WebSocket upgrade 也走同一道门。DSH 本机的浏览器登录原样留在 loopback 后面。改网关密码只让网关会话失效，不动 DSH 自己的凭证。登录按 IP 限速（10 次 / 10 分钟），密码比较是 timing-safe 的。
+
+**局域网和 Cloudflare 是同一条路。** 网关默认听在 `0.0.0.0:8642`。监听所有网卡时，本机的局域网 IPv4 会自动写进 `trustedHosts`，手机打开 `http://<局域网地址>:8642` 就能过护栏。Cloudflare Tunnel 把 `https://你的域名` 转到 `http://127.0.0.1:8642`，只要把这个域名加进同一份 `trustedHosts`。两处浏览器各自带着真实的 `Host` 和 `Origin`，密码和会话是同一套，不用为局域网和隧道各做一种转发。
+
+**信任护栏继续生效。** DSH 0.2 的 `/api` 只在 `Host` 为 loopback 或列入 `trustedHosts`、附带的 `Origin` 与该 Host 一致、且 `Sec-Fetch-Site` 不是 `cross-site` 时放行。本网关原样转发这些头，并在运行时把对外名字追加到 connection 的 `trustedHosts`，与 DSH 已经推导的 LAN 地址、`--trusted-host` 并列。没写进名单的主机名仍然 403。DNS 重绑定和跨站浏览器请求打到的是同一道检查。
 
 **DSH 不出 loopback。** `dsh web --host 0.0.0.0` 会被拒绝，因为 harness 能执行 shell。网关是单独的监听器（默认 `0.0.0.0:8642`），自带密码。DSH 本身仍然不能绑到网卡上。
 
@@ -31,8 +35,7 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 
 ## 一并带上的
 
-- 登录页、HMAC-SHA256 签名的 `HttpOnly; SameSite=Lax` cookie（默认 7 天），以及脚本用的 `Authorization: Bearer`。WebSocket upgrade 走同一套会话。
-- 登录按 IP 限速（10 次 / 10 分钟）、timing-safe 密码比较、`next` 的开放重定向防护、网关 cookie 不下发上游、密钥文件 `0600`。
+- `next` 的开放重定向防护，密钥文件 `0600`。首次运行会生成随机密码并只把路径记入日志一次。
 
 ### 缓存策略
 
@@ -72,14 +75,12 @@ peer 对齐 DSH 0.2：`@deepseek-ai/cordis@~4.0.4`、`@deepseek-ai/schemastery@~
       - harness.example
 ```
 
-具体的非 loopback 绑定地址会自动发布。`0.0.0.0` 不是客户端 Host，域名和公网 IP 写在 `trustedHosts`。不带端口的条目匹配任意端口，`host:port` 精确匹配。不是裸 authority 的值会让插件加载失败。
+监听 `0.0.0.0` 或 `::` 时，每块网卡的非 loopback IPv4 会自动发布，局域网不用再手写地址。单个具体绑定地址也会自动发布。Cloudflare 或公网域名写在 `trustedHosts`。不带端口的条目匹配任意端口，`host:port` 精确匹配。不是裸 authority 的值会让插件加载失败。
 
 ### TLS 放在前面
 
-- **Cloudflare Tunnel** —— `cloudflared` 指向 `http://127.0.0.1:8642`。Caddy、nginx、Traefik 同样：TLS 在反代终结，网关留在本机或局域网。
-- **LAN / VPS** —— 前面加 TLS。明文 HTTP 下密码和会话 cookie 会直接出现在链路上。
-
-`trustedHosts` 写浏览器真正发送的名字（`harness.example`，端口属于 authority 时写 `harness.example:443`）。
+- **局域网** —— 打开 `http://<本机局域网地址>:8642`。地址已在信任名单里。同一 Wi-Fi 上的明文 HTTP 能用；离开这台机器所在的网络就不要再裸奔。
+- **Cloudflare Tunnel** —— `cloudflared` 指向 `http://127.0.0.1:8642`，`trustedHosts` 写浏览器地址栏里的域名（端口属于 authority 时写 `harness.example:443`）。Caddy、nginx、Traefik 同样：TLS 在反代终结。
 
 ## 工作原理
 

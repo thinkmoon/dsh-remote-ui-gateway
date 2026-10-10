@@ -74,6 +74,7 @@ export function forwardRequestHeaders(req, { cookieName, proto }) {
   }
   const host = joinValue(req.headers.host);
   if (host !== undefined) headers.host = host;
+  if (String(headers.accept ?? "").includes("text/html")) delete headers["accept-encoding"];
   headers["x-forwarded-host"] = host;
   headers["x-forwarded-for"] = appendList(joinValue(req.headers["x-forwarded-for"]), String(req.socket.remoteAddress));
   headers["x-forwarded-proto"] = proto;
@@ -177,6 +178,25 @@ function cacheControlFor(req, contentType) {
   return "public, max-age=300";
 }
 
+const HOST_OWNER_SCRIPT = "<script>try{var t=window.__DSH_TRANSPORT__;if(t==null)window.__DSH_TRANSPORT__={ownsHost:true};else t.ownsHost=true}catch(e){}</script>";
+
+/**
+ * DSH keeps the settings document in memory unless the page is treated as
+ * the operator's own machine. A gateway-authenticated browser is that
+ * operator, including on a LAN or tunnel host, so the shell marks the
+ * transport before any client module reads it.
+ * @param {Buffer} body
+ * @returns {Buffer}
+ */
+function injectHostOwner(body) {
+  const html = body.toString("utf8");
+  if (html.includes("t.ownsHost=true")) return body;
+  const head = html.match(/<head\b[^>]*>/i);
+  if (head === null || head.index === undefined) return Buffer.from(HOST_OWNER_SCRIPT + html, "utf8");
+  const at = head.index + head[0].length;
+  return Buffer.from(html.slice(0, at) + HOST_OWNER_SCRIPT + html.slice(at), "utf8");
+}
+
 /**
  * @param {URL} target
  * @param {object} options
@@ -212,9 +232,25 @@ export function createHttpForwarder(target, { cookieName, onError }) {
           const cacheControl = cacheControlFor(req, String(up.headers["content-type"] ?? ""));
           if (cacheControl !== undefined && (up.statusCode ?? 502) < 400) outHeaders["cache-control"] = cacheControl;
         }
-        res.writeHead(up.statusCode ?? 502, outHeaders);
-        up.pipe(res);
-        res.on("close", () => up.destroy());
+        const contentType = String(up.headers["content-type"] ?? "");
+        const encoded = up.headers["content-encoding"] !== undefined;
+        const html = (req.method === "GET" || req.method === "HEAD") && (up.statusCode ?? 502) < 400 && contentType.includes("text/html") && !encoded;
+        if (!html) {
+          res.writeHead(up.statusCode ?? 502, outHeaders);
+          up.pipe(res);
+          res.on("close", () => up.destroy());
+          return;
+        }
+        const chunks = [];
+        up.on("data", (chunk) => chunks.push(chunk));
+        up.on("end", () => {
+          const body = Buffer.concat(chunks);
+          const next = req.method === "HEAD" ? body : injectHostOwner(body);
+          delete outHeaders["content-length"];
+          outHeaders["content-length"] = String(next.length);
+          res.writeHead(up.statusCode ?? 502, outHeaders);
+          res.end(req.method === "HEAD" ? undefined : next);
+        });
       },
     );
     upstream.on("error", (err) => {

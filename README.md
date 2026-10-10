@@ -11,7 +11,11 @@ dsh web                                     # gateway listens on 0.0.0.0:8642
 
 ## What makes it different
 
-**The trust fence stays on.** DSH 0.2 admits `/api` only when `Host` is loopback or listed in `trustedHosts`, a present `Origin` matches that Host, and `Sec-Fetch-Site` is not `cross-site`. This gateway forwards those headers unchanged and appends your public names to the connection row, beside the LAN addresses and `--trusted-host` values DSH already derived. A name you did not list is still refused. DNS rebinding and cross-site browser requests keep hitting the same check they hit locally.
+**The gateway authenticates on its own, in front of DSH.** Remote traffic hits a login page or `Authorization: Bearer` first. A pass issues a gateway session: scrypt derives the key, HMAC-SHA256 signs an expiring `HttpOnly; SameSite=Lax` cookie (default 7 days). That cookie is never forwarded upstream, and WebSocket upgrades face the same gate. DSH's own browser login stays on loopback behind it. Changing the gateway password drops gateway sessions only; DSH credentials stay put. Logins are limited per IP (10 attempts / 10 minutes), and the password compare is timing-safe.
+
+**LAN and Cloudflare are the same path.** The gateway listens on `0.0.0.0:8642`. An all-interfaces bind publishes this machine's LAN IPv4 addresses into `trustedHosts`, so a phone can open `http://<lan-address>:8642` and pass the fence. A Cloudflare Tunnel points `https://your.name` at `http://127.0.0.1:8642`; add that name to the same `trustedHosts` list. Each browser keeps its real `Host` and `Origin`. One password, one session, no separate forwarding mode for the LAN and the tunnel.
+
+**The trust fence stays on.** DSH 0.2 admits `/api` only when `Host` is loopback or listed in `trustedHosts`, a present `Origin` matches that Host, and `Sec-Fetch-Site` is not `cross-site`. This gateway forwards those headers unchanged and appends your public names to the connection service's `trustedHosts` at runtime, beside the LAN addresses and `--trusted-host` values DSH already derived. A name you did not list is still refused. DNS rebinding and cross-site browser requests keep hitting the same check they hit locally.
 
 **DSH never leaves loopback.** `dsh web --host 0.0.0.0` is rejected on purpose: the harness can run shell commands. The gateway is a separate listener (default `0.0.0.0:8642`) with its own password. Binding DSH to the network is still refused.
 
@@ -31,8 +35,7 @@ remote browser ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, password)
 
 ## Also included
 
-- Password page, HMAC-SHA256 `HttpOnly; SameSite=Lax` cookie (default 7 days), and `Authorization: Bearer` for scripts. WebSocket upgrades use the same session.
-- Per-IP login limit (10 attempts / 10 minutes), timing-safe password compare, open-redirect guard on `next`, gateway cookie withheld from upstream, secret file mode `0600`.
+- Open-redirect guard on `next`, secret file mode `0600`. First run generates a random password and logs the path once.
 
 ### Cache policy
 
@@ -72,14 +75,12 @@ In the profile's `cordis.patch.yml`:
       - harness.example
 ```
 
-A concrete non-loopback bind address is published automatically. `0.0.0.0` is not a client Host, so DNS names and public IPs go in `trustedHosts`. A port-less entry matches any port; `host:port` is exact. A value that is not a bare authority fails plugin load.
+Listening on `0.0.0.0` or `::` publishes every non-loopback IPv4 address, so the LAN needs no hand-written entries. A single concrete bind address is published too. Put Cloudflare or other public names in `trustedHosts`. A port-less entry matches any port; `host:port` is exact. A value that is not a bare authority fails plugin load.
 
 ### In front of TLS
 
-- **Cloudflare Tunnel** — point `cloudflared` at `http://127.0.0.1:8642`. Caddy, nginx, and Traefik work the same way: TLS ends at the proxy, the gateway stays on loopback or the LAN.
-- **LAN / VPS** — put TLS in front. Over plaintext HTTP the password and session cookie travel in cleartext.
-
-Put the name browsers actually send (`harness.example`, or `harness.example:443` when the port is part of the authority) into `trustedHosts`.
+- **LAN** — open `http://<this-machine-lan-address>:8642`. That address is already trusted. Plain HTTP is fine on the same network; do not leave it open beyond that network.
+- **Cloudflare Tunnel** — point `cloudflared` at `http://127.0.0.1:8642` and set `trustedHosts` to the name in the browser bar (`harness.example:443` when the port is part of the authority). Caddy, nginx, and Traefik work the same way: TLS ends at the proxy.
 
 ## How it works
 
