@@ -1,5 +1,5 @@
 {
-  "name": "dsh-remote-gateway",
+  "name": "dsh-remote-ui-gateway",
   "version": "0.3.0",
   "description": "DSH plugin: authenticated reverse proxy for the web GUI. Forwards the browser Host and Origin unchanged and publishes those names as DSH 0.2 trustedHosts so the connection fence admits the remote session.",
   "type": "module",

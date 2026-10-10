@@ -77,7 +77,7 @@ function assertTrustedAuthority(entry) {
   }
   const canonical = parsed === undefined ? undefined : canonicalAuthority(entry, parsed);
   if (parsed !== undefined && canonical === entry.toLowerCase()) return;
-  throw new Error(`dsh-remote-gateway: trustedHosts entry ${JSON.stringify(entry)} is not a bare host[:port] authority`);
+  throw new Error(`dsh-remote-ui-gateway: trustedHosts entry ${JSON.stringify(entry)} is not a bare host[:port] authority`);
 }
 
 /**

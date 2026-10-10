@@ -7,30 +7,34 @@ import { randomPassword } from "./auth.mjs";
  * @returns {string}
  */
 export function secretFilePath() {
-  return path.join(homedir(), ".dsh-remote-gateway", "secret");
+  return path.join(homedir(), ".dsh-remote-ui-gateway", "secret");
 }
 
 /**
- * Previous install location, read when the renamed file is absent.
- * @returns {string}
+ * Previous install locations, read in order when the new file is absent.
+ * @returns {string[]}
  */
-function legacySecretFilePath() {
-  return path.join(homedir(), ".dsh-gateway", "secret");
+function legacySecretFilePaths() {
+  return [
+    path.join(homedir(), ".dsh-remote-gateway", "secret"),
+    path.join(homedir(), ".dsh-gateway", "secret"),
+  ];
 }
 
 /**
- * Resolve the gateway password: explicit value, then DSH_REMOTE_GATEWAY_PASSWORD
- * (or the previous DSH_GATEWAY_PASSWORD), then the persisted secret file
- * (auto-generated on first run, mode 0600). A secret written by the old
- * `dsh-gateway` name is reused when the new file does not exist yet.
+ * Resolve the gateway password: explicit value, then DSH_REMOTE_UI_GATEWAY_PASSWORD
+ * (then the previous DSH_REMOTE_GATEWAY_PASSWORD / DSH_GATEWAY_PASSWORD), then
+ * the persisted secret file (auto-generated on first run, mode 0600). Secrets
+ * written by the old `dsh-remote-gateway` or `dsh-gateway` names are reused
+ * when the new file does not exist yet.
  * @param {string | undefined} explicit
  * @returns {{ password: string, generated: boolean, file: string }}
  */
 export function resolveStoredPassword(explicit) {
   if (typeof explicit === "string" && explicit.length > 0) return { password: explicit, generated: false, file: secretFilePath() };
-  const env = process.env.DSH_REMOTE_GATEWAY_PASSWORD || process.env.DSH_GATEWAY_PASSWORD;
+  const env = process.env.DSH_REMOTE_UI_GATEWAY_PASSWORD || process.env.DSH_REMOTE_GATEWAY_PASSWORD || process.env.DSH_GATEWAY_PASSWORD;
   if (env !== undefined && env !== "") return { password: env, generated: false, file: secretFilePath() };
-  for (const file of [secretFilePath(), legacySecretFilePath()]) {
+  for (const file of [secretFilePath(), ...legacySecretFilePaths()]) {
     if (existsSync(file) && statSync(file).isFile()) {
       const secret = readFileSync(file, "utf8").replace(/\r?\n$/, "");
       if (secret.length > 0) return { password: secret, generated: false, file };

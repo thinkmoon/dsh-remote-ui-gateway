@@ -1,6 +1,6 @@
-# dsh-remote-gateway bundle patch
+# dsh-remote-ui-gateway bundle patch
 #
-#   dsh plugin --profile <name> add link:/path/to/dsh-remote-gateway
+#   dsh plugin --profile <name> add link:/path/to/dsh-remote-ui-gateway
 #
 # The gateway forwards the browser Host and Origin unchanged. DSH 0.2 admits
 # a non-loopback Host only when it is listed on the connection service. The
@@ -8,4 +8,4 @@
 # plugin installer parses this file with stock YAML, which rejects !!js.
 - insert:
     - id: web-gateway
-      name: 'dsh-remote-gateway'
+      name: 'dsh-remote-ui-gateway'

@@ -5,10 +5,10 @@ import { createGateway } from "./server.mjs";
 import { collectTrustedHosts } from "./trusted-hosts.mjs";
 
 /**
- * dsh-remote-gateway — password-gated reverse proxy that forwards the
+ * dsh-remote-ui-gateway — password-gated reverse proxy that forwards the
  * browser's Host and Origin unchanged and publishes those names on
  * `remoteGateway.trustedHosts` for the DSH 0.2 connection fence.
- * @module dsh-remote-gateway
+ * @module dsh-remote-ui-gateway
  */
 
 /** @typedef {import("@deepseek-ai/cordis").Context} Context */
@@ -18,7 +18,7 @@ import { collectTrustedHosts } from "./trusted-hosts.mjs";
  * @typedef {import("@deepseek-ai/cordis").Logger} Logger
  */
 
-export const name = "dsh-remote-gateway";
+export const name = "dsh-remote-ui-gateway";
 
 export const Config = z.object({
   enabled: z.boolean().default(true),
@@ -35,7 +35,7 @@ export const Config = z.object({
  */
 export function apply(ctx, config = Config({})) {
   /** @type {Logger} */
-  const logger = /** @type {any} */ (ctx).logger("dsh-remote-gateway");
+  const logger = /** @type {any} */ (ctx).logger("dsh-remote-ui-gateway");
   const trustedHosts = config.enabled ? collectTrustedHosts(config.trustedHosts, config.host) : [];
   /** @type {any} */ (ctx).provide("remoteGateway", { trustedHosts });
   /** @type {any} */ (ctx).inject(["connection"], (/** @type {any} */ connectionCtx) => {
@@ -60,7 +60,7 @@ export function apply(ctx, config = Config({})) {
   /** @type {any} */ (ctx).inject(["webServer", "connection"], async (/** @type {GatewayContext & { connection?: { authenticatedUrl?: (url: string) => string } }} */ webCtx) => {
     const webPort = webCtx.webServer?.port;
     if (webPort === undefined) {
-      throw new Error("dsh-remote-gateway: webServer is not listening (no port)");
+      throw new Error("dsh-remote-ui-gateway: webServer is not listening (no port)");
     }
     const { password, generated, file } = resolveStoredPassword(config.password);
     const dshLaunchToken = () => {
@@ -100,12 +100,12 @@ export function apply(ctx, config = Config({})) {
       }
       throw err;
     }
-    webCtx.effect(() => () => server.close(), "dsh-remote-gateway: listener");
+    webCtx.effect(() => () => server.close(), "dsh-remote-ui-gateway: listener");
     const address = server.address();
     const shownPort = typeof address === "object" && address !== null ? address.port : config.port;
     logger.info(`listening on http://${config.host}:${shownPort} -> http://127.0.0.1:${webPort}`);
     if (generated) {
-      logger.info(`password generated and stored at ${file} (mode 0600); set the plugin config "password" or DSH_REMOTE_GATEWAY_PASSWORD to override`);
+      logger.info(`password generated and stored at ${file} (mode 0600); set the plugin config "password" or DSH_REMOTE_UI_GATEWAY_PASSWORD to override`);
     }
   });
 }

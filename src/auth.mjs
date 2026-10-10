@@ -2,7 +2,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 
 /** @typedef {import("node:http").IncomingMessage} IncomingMessage */
 
-const KEY_INFO = "dsh-remote-gateway-session-v1";
+const KEY_INFO = "dsh-remote-ui-gateway-session-v1";
 
 /**
  * @param {string} password

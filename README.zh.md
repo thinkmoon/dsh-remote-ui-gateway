@@ -1,11 +1,13 @@
-# dsh-remote-gateway
+# dsh-remote-ui-gateway
+
+[![npm 版本](https://badge.fury.io/js/dsh-remote-ui-gateway.svg)](https://www.npmjs.com/package/dsh-remote-ui-gateway)
 
 [English](README.md) | [中文](README.zh.md)
 
 [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI 的远程入口，以插件形式随 `dsh web` 启动。DSH 继续只监听 loopback。对外只暴露这个网关，远程会话由 DSH 0.2 自己的 `trustedHosts` 护栏放行。
 
 ```sh
-dsh plugin --profile web add dsh-remote-gateway   # 或 link:<本地目录>
+dsh plugin --profile web add dsh-remote-ui-gateway   # 或 link:<本地目录>
 dsh web                                     # gateway 监听 0.0.0.0:8642
 ```
 
@@ -26,7 +28,7 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 **它是插件，不是旁边再跑一个进程。** 随 `dsh web` 启动和退出，跟随 `--port 0`。软注入 `webServer`，没有 web 服务的 profile 照常启动。网关端口被占只关掉网关。运行时代码只有 Node 核心（`node:http`、`node:crypto`、`node:net`、`node:tls`）。
 
 ```
-远程浏览器 ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, 密码)
+远程浏览器 ──HTTPS──> dsh-remote-ui-gateway (0.0.0.0:8642, 密码)
                            │  Host、Origin、Sec-Fetch-Site 原样转发
                            ▼
                     DSH web (127.0.0.1:<dshPort>)
@@ -51,13 +53,13 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 ## 安装
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-remote-gateway
+dsh plugin --profile web add link:/path/to/dsh-remote-ui-gateway
 dsh web
 ```
 
 peer 对齐 DSH 0.2：`@deepseek-ai/cordis@~4.0.4`、`@deepseek-ai/schemastery@~3.18.4`。
 
-密码解析顺序：插件 `password` → `$DSH_REMOTE_GATEWAY_PASSWORD`（再回退 `$DSH_GATEWAY_PASSWORD`）→ `~/.dsh-remote-gateway/secret`（再回退 `~/.dsh-gateway/secret`）。首次运行生成随机密码，把路径记入日志一次，文件权限 `0600`。
+密码解析顺序：插件 `password` → `$DSH_REMOTE_UI_GATEWAY_PASSWORD`（再回退 `$DSH_REMOTE_GATEWAY_PASSWORD`、`$DSH_GATEWAY_PASSWORD`）→ `~/.dsh-remote-ui-gateway/secret`（再回退 `~/.dsh-remote-gateway/secret`、`~/.dsh-gateway/secret`）。首次运行生成随机密码，把路径记入日志一次，文件权限 `0600`。
 
 ### 配置
 

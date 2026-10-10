@@ -1,11 +1,13 @@
-# dsh-remote-gateway
+# dsh-remote-ui-gateway
+
+[![npm version](https://badge.fury.io/js/dsh-remote-ui-gateway.svg)](https://www.npmjs.com/package/dsh-remote-ui-gateway)
 
 [English](README.md) | [中文](README.zh.md)
 
 Remote access to the [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) Web GUI, as a plugin that starts with `dsh web`. DSH stays on loopback. The gateway is the only process on the network, and DSH 0.2 admits the session through its own `trustedHosts` fence.
 
 ```sh
-dsh plugin --profile web add dsh-remote-gateway   # or link:<local checkout>
+dsh plugin --profile web add dsh-remote-ui-gateway   # or link:<local checkout>
 dsh web                                     # gateway listens on 0.0.0.0:8642
 ```
 
@@ -26,7 +28,7 @@ dsh web                                     # gateway listens on 0.0.0.0:8642
 **It is a plugin, not a sidecar.** It starts and stops with `dsh web`, follows `--port 0`, and uses a soft inject so profiles without `webServer` still boot. A busy gateway port disables only the gateway. Runtime code is Node core (`node:http`, `node:crypto`, `node:net`, `node:tls`).
 
 ```
-remote browser ──HTTPS──> dsh-remote-gateway (0.0.0.0:8642, password)
+remote browser ──HTTPS──> dsh-remote-ui-gateway (0.0.0.0:8642, password)
                                │  Host, Origin, Sec-Fetch-Site unchanged
                                ▼
                         DSH web (127.0.0.1:<dshPort>)
@@ -51,13 +53,13 @@ Applied to successful (2xx/3xx) GET/HEAD only. Non-hash responses never override
 ## Install
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-remote-gateway
+dsh plugin --profile web add link:/path/to/dsh-remote-ui-gateway
 dsh web
 ```
 
 Peers match DSH 0.2: `@deepseek-ai/cordis@~4.0.4` and `@deepseek-ai/schemastery@~3.18.4`.
 
-Password resolution: plugin `password` → `$DSH_REMOTE_GATEWAY_PASSWORD` (then `$DSH_GATEWAY_PASSWORD`) → `~/.dsh-remote-gateway/secret` (then `~/.dsh-gateway/secret`). First run generates a random password, logs the path once, and writes the file as `0600`.
+Password resolution: plugin `password` → `$DSH_REMOTE_UI_GATEWAY_PASSWORD` (then `$DSH_REMOTE_GATEWAY_PASSWORD`, then `$DSH_GATEWAY_PASSWORD`) → `~/.dsh-remote-ui-gateway/secret` (then `~/.dsh-remote-gateway/secret`, then `~/.dsh-gateway/secret`). First run generates a random password, logs the path once, and writes the file as `0600`.
 
 ### Configuration
 

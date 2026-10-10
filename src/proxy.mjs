@@ -259,7 +259,7 @@ export function createHttpForwarder(target, { cookieName, onError }) {
       } else {
         onError?.(req, err);
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
-        res.end(`dsh-remote-gateway: upstream unreachable (${errnoOf(err)})`);
+        res.end(`dsh-remote-ui-gateway: upstream unreachable (${errnoOf(err)})`);
       }
     });
     req.on("aborted", () => upstream.destroy());
