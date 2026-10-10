@@ -13,7 +13,9 @@ dsh web                                     # gateway listens on 0.0.0.0:8642
 
 ## What makes it different
 
-**The gateway authenticates on its own, in front of DSH.** Remote traffic hits a login page or `Authorization: Bearer` first. A pass issues a gateway session: scrypt derives the key, HMAC-SHA256 signs an expiring `HttpOnly; SameSite=Lax` cookie (default 7 days). That cookie is never forwarded upstream, and WebSocket upgrades face the same gate. DSH's own browser login stays on loopback behind it. Changing the gateway password drops gateway sessions only; DSH credentials stay put. Logins are limited per IP (10 attempts / 10 minutes), and the password compare is timing-safe.
+**The gateway authenticates on its own, in front of DSH.** Remote traffic hits a login page or `Authorization: Bearer` first. A pass issues a gateway session: scrypt derives the key, HMAC-SHA256 signs an expiring `HttpOnly; SameSite=Lax` cookie (default 7 days). That cookie is never forwarded upstream, and WebSocket upgrades face the same gate. Changing the gateway password drops gateway sessions only; DSH credentials stay put. Logins are limited per IP (10 attempts / 10 minutes), and the password compare is timing-safe.
+
+**One login covers the whole GUI, including DSH's own browser session.** After the gateway's password check, the gateway exchanges DSH's one-time launch token — a fresh value on every `dsh web` start, read inside the gateway process — for the Host-bound DSH browser cookie, and sets it on your remote browser. The token itself never reaches the browser. When DSH's LAN device pairing is enabled, the gateway also completes the pairing handshake on loopback (`/api/pair/issue` + `/api/pair/accept`) and hands your browser the device cookie directly, so you never have to open the desktop pairing link.
 
 **LAN and Cloudflare are the same path.** The gateway listens on `0.0.0.0:8642`. An all-interfaces bind publishes this machine's LAN IPv4 addresses into `trustedHosts`, so a phone can open `http://<lan-address>:8642` and pass the fence. A Cloudflare Tunnel points `https://your.name` at `http://127.0.0.1:8642`; add that name to the same `trustedHosts` list. Each browser keeps its real `Host` and `Origin`. One password, one session, no separate forwarding mode for the LAN and the tunnel.
 
@@ -21,7 +23,7 @@ dsh web                                     # gateway listens on 0.0.0.0:8642
 
 **DSH never leaves loopback.** `dsh web --host 0.0.0.0` is rejected on purpose: the harness can run shell commands. The gateway is a separate listener (default `0.0.0.0:8642`) with its own password. Binding DSH to the network is still refused.
 
-**The whole GUI, including the live socket.** HTTP bodies are piped, not buffered, so large uploads and SSE pass through. WebSocket upgrades (`/api/events.mux`, `/api/events.host`) are raw bidirectional tunnels. There is no second UI and no pairing protocol to keep in sync with DSH releases.
+**The whole GUI, including the live socket.** HTTP bodies are piped, not buffered, so large uploads and SSE pass through. WebSocket upgrades (`/api/events.mux`, `/api/events.host`) are raw bidirectional tunnels. Cookie minting and pairing ride DSH's own loopback APIs, so there is no second UI and no private protocol to keep in sync with DSH releases.
 
 **Repeat visits are fast.** Upstream DSH sends no cache headers, so a remote browser re-downloads the JS/CSS bundle every time. The gateway adds a content-aware `Cache-Control` policy: hash-addressed assets are immutable for a year, other static files revalidate after five minutes, HTML is `no-store`.
 
@@ -29,14 +31,16 @@ dsh web                                     # gateway listens on 0.0.0.0:8642
 
 ```
 remote browser ──HTTPS──> dsh-remote-ui-gateway (0.0.0.0:8642, password)
-                               │  Host, Origin, Sec-Fetch-Site unchanged
-                               ▼
-                        DSH web (127.0.0.1:<dshPort>)
-                        trustedHosts includes the public names
+                                │  Host, Origin, Sec-Fetch-Site unchanged
+                                ▼
+                         DSH web (127.0.0.1:<dshPort>)
+                         trustedHosts includes the public names
 ```
 
 ## Also included
 
+- DSH browser cookie minted in-gateway from the one-time launch token; the token changes on every start and never reaches the browser.
+- Device pairing completed on loopback when DSH's LAN pairing is on: the remote browser gets the `dsh_pair` device cookie (1 year, `HttpOnly`) straight from the gateway login. When pairing is off or the API is absent, requests pass through untouched.
 - Open-redirect guard on `next`, secret file mode `0600`. First run generates a random password and logs the path once.
 
 ### Cache policy
@@ -53,7 +57,8 @@ Applied to successful (2xx/3xx) GET/HEAD only. Non-hash responses never override
 ## Install
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-remote-ui-gateway
+dsh plugin --profile web add dsh-remote-ui-gateway           # from npm
+dsh plugin --profile web add link:/path/to/dsh-remote-ui-gateway   # local checkout
 dsh web
 ```
 
@@ -90,6 +95,8 @@ Listening on `0.0.0.0` or `::` publishes every non-loopback IPv4 address, so the
 | --- | --- |
 | Remote admission | Browser `Host` / `Origin` / `Sec-Fetch-Site` pass through. `connection.trustedHosts` is the web-runtime list plus `remoteGateway.trustedHosts` |
 | Auth | scrypt-derived key signs `<exp>.<hmac>` session tokens |
+| DSH browser session | One-time launch token exchanged in-gateway for a Host-bound cookie |
+| Device pairing | `/api/pair/issue` + `/api/pair/accept` replayed on loopback when DSH's LAN pairing is on |
 | WebSockets | Handshake replayed upstream, then a byte pipe in both directions |
 | Caching | Hash-addressed assets immutable for a year; other static files revalidate after 5 minutes; HTML is `no-store` |
 | Lifetime | Listener is a cordis effect on `webServer`; disposal closes it |
@@ -97,7 +104,8 @@ Listening on `0.0.0.0` or `::` publishes every non-loopback IPv4 address, so the
 ## Security
 
 - A logged-in gateway session is a local DSH browser session, including agent shell tools. Keep a strong password and TLS in front.
-- Changing the password invalidates every session (the signing key is derived from it).
+- The device cookie, when minted, lasts a year. Paired devices are managed from DSH's settings page.
+- Changing the password invalidates every gateway session (the signing key is derived from it); DSH-side credentials and device pairing are untouched.
 - Do not publish the plaintext gateway port on the internet.
 
 ## Requirements

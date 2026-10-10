@@ -1,7 +1,16 @@
 {
   "name": "dsh-remote-ui-gateway",
   "version": "0.3.0",
-  "description": "DSH plugin: authenticated reverse proxy for the web GUI. Forwards the browser Host and Origin unchanged and publishes those names as DSH 0.2 trustedHosts so the connection fence admits the remote session.",
+  "description": "DSH plugin: authenticated reverse proxy for the web GUI. Forwards the browser Host and Origin unchanged and publishes those names as DSH 0.2 trustedHosts so the connection fence admits the remote session; mints the DSH browser cookie and completes device pairing in-gateway from one login.",
+  "homepage": "https://github.com/thinkmoon/dsh-remote-gateway",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thinkmoon/dsh-remote-gateway.git"
+  },
+  "author": {
+    "name": "thinkmoon",
+    "email": "tim@thinkmoon.cn"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -34,6 +43,9 @@
     "reverse-proxy",
     "gateway"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/schemastery": "~3.18.4"

@@ -13,7 +13,9 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 
 ## 亮点
 
-**网关自己有一套认证，挡在 DSH 前面。** 远程流量先过登录页或 `Authorization: Bearer`。通过后才拿到网关自己的会话：密码经 scrypt 派生密钥，HMAC-SHA256 签出带过期时间的 `HttpOnly; SameSite=Lax` cookie（默认 7 天）。这张 cookie 不会转发给 DSH，WebSocket upgrade 也走同一道门。DSH 本机的浏览器登录原样留在 loopback 后面。改网关密码只让网关会话失效，不动 DSH 自己的凭证。登录按 IP 限速（10 次 / 10 分钟），密码比较是 timing-safe 的。
+**网关自己有一套认证，挡在 DSH 前面。** 远程流量先过登录页或 `Authorization: Bearer`。通过后才拿到网关自己的会话：密码经 scrypt 派生密钥，HMAC-SHA256 签出带过期时间的 `HttpOnly; SameSite=Lax` cookie（默认 7 天）。这张 cookie 不会转发给 DSH，WebSocket upgrade 也走同一道门。改网关密码只让网关会话失效，不动 DSH 自己的凭证。登录按 IP 限速（10 次 / 10 分钟），密码比较是 timing-safe 的。
+
+**一次登录覆盖整个 GUI，包括 DSH 自己的浏览器会话。** 网关密码验证通过后，网关在进程内用 DSH 的一次性 launch token（每次 `dsh web` 启动都是新值）换取与 Host 绑定的 DSH 浏览器 cookie，并直接设置到你的远程浏览器上。token 本身从不进入浏览器。如果 DSH 开启了局域网设备配对，网关还会在 loopback 上完成配对握手（`/api/pair/issue` + `/api/pair/accept`），把设备 cookie 直接交给你的浏览器——你不需要打开桌面端配对链接。
 
 **局域网和 Cloudflare 是同一条路。** 网关默认听在 `0.0.0.0:8642`。监听所有网卡时，本机的局域网 IPv4 会自动写进 `trustedHosts`，手机打开 `http://<局域网地址>:8642` 就能过护栏。Cloudflare Tunnel 把 `https://你的域名` 转到 `http://127.0.0.1:8642`，只要把这个域名加进同一份 `trustedHosts`。两处浏览器各自带着真实的 `Host` 和 `Origin`，密码和会话是同一套，不用为局域网和隧道各做一种转发。
 
@@ -21,7 +23,7 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 
 **DSH 不出 loopback。** `dsh web --host 0.0.0.0` 会被拒绝，因为 harness 能执行 shell。网关是单独的监听器（默认 `0.0.0.0:8642`），自带密码。DSH 本身仍然不能绑到网卡上。
 
-**整个 GUI，包括实时通道。** HTTP 正文管道转发、不缓冲，大上传和 SSE 原样通过。WebSocket upgrade（`/api/events.mux`、`/api/events.host`）是原始双向字节隧道。没有第二套界面，也不需要一套要跟着 DSH 版本走的配对协议。
+**整个 GUI，包括实时通道。** HTTP 正文管道转发、不缓冲，大上传和 SSE 原样通过。WebSocket upgrade（`/api/events.mux`、`/api/events.host`）是原始双向字节隧道。cookie 签发和配对走的是 DSH 自己的 loopback API，没有第二套界面，也没有一套要跟着 DSH 版本走的私有协议。
 
 **第二次打开是快的。** 上游 DSH 不发缓存头，远程浏览器每次都重新拉整包 JS/CSS。网关按内容补上 `Cache-Control`：带内容 hash 的资源 immutable 一年，其他静态文件 5 分钟后复验证，HTML 为 `no-store`。
 
@@ -29,14 +31,16 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 
 ```
 远程浏览器 ──HTTPS──> dsh-remote-ui-gateway (0.0.0.0:8642, 密码)
-                           │  Host、Origin、Sec-Fetch-Site 原样转发
-                           ▼
-                    DSH web (127.0.0.1:<dshPort>)
-                    trustedHosts 包含对外主机名
+                            │  Host、Origin、Sec-Fetch-Site 原样转发
+                            ▼
+                     DSH web (127.0.0.1:<dshPort>)
+                     trustedHosts 包含对外主机名
 ```
 
 ## 一并带上的
 
+- DSH 浏览器 cookie 由网关在进程内用一次性 launch token 换取；token 每次启动都变，且从不进入浏览器。
+- DSH 开启局域网设备配对时，网关在 loopback 上完成配对：远程浏览器直接拿到 `dsh_pair` 设备 cookie（1 年、`HttpOnly`），不用碰桌面配对链接。配对关闭或 API 不存在时，请求原样通过。
 - `next` 的开放重定向防护，密钥文件 `0600`。首次运行会生成随机密码并只把路径记入日志一次。
 
 ### 缓存策略
@@ -53,7 +57,8 @@ dsh web                                     # gateway 监听 0.0.0.0:8642
 ## 安装
 
 ```sh
-dsh plugin --profile web add link:/path/to/dsh-remote-ui-gateway
+dsh plugin --profile web add dsh-remote-ui-gateway           # 从 npm
+dsh plugin --profile web add link:/path/to/dsh-remote-ui-gateway   # 本地目录
 dsh web
 ```
 
@@ -90,6 +95,8 @@ peer 对齐 DSH 0.2：`@deepseek-ai/cordis@~4.0.4`、`@deepseek-ai/schemastery@~
 | --- | --- |
 | 远程放行 | 浏览器的 `Host` / `Origin` / `Sec-Fetch-Site` 原样转发。`connection.trustedHosts` 是 web runtime 列表再加上 `remoteGateway.trustedHosts` |
 | 认证 | scrypt 派生密钥签名 `<exp>.<hmac>` 会话令牌 |
+| DSH 浏览器会话 | 网关内用一次性 launch token 换取与 Host 绑定的 cookie |
+| 设备配对 | DSH 开启局域网配对时，在 loopback 上重放 `/api/pair/issue` + `/api/pair/accept` |
 | WebSocket | 向上游重放握手，之后字节双向管道 |
 | 缓存 | hash 资源 immutable 一年；其他静态文件 5 分钟后复验证；HTML 为 `no-store` |
 | 生命周期 | 监听器是挂在 `webServer` 上的 cordis effect，销毁时关闭 |
@@ -97,7 +104,8 @@ peer 对齐 DSH 0.2：`@deepseek-ai/cordis@~4.0.4`、`@deepseek-ai/schemastery@~
 ## 安全
 
 - 登录后的网关会话等同于本地 DSH 浏览器会话，包括 agent 的 shell 工具。使用强密码，并让 TLS 挡在前面。
-- 修改密码会使全部会话失效（签名密钥由密码派生）。
+- 设备 cookie（如签发）有效期一年，已配对设备在 DSH 的设置页管理。
+- 修改密码会使全部网关会话失效（签名密钥由密码派生）；DSH 侧的凭证和设备配对不受影响。
 - 不要把网关的明文端口暴露到公网。
 
 ## 环境要求
